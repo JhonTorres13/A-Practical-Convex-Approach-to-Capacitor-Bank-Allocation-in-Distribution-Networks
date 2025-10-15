@@ -3,15 +3,18 @@ import cvxpy as cvx
 import matplotlib.pyplot as plt
 import pandas as pd
 
+rut_arc='Parac_electricos_IEEE33n.xlsx'
 # === Lectura de datos ===
-datos_l=pd.read_excel('Parac_electricos_IEEE33n.xlsx',sheet_name='Lineas')
-datos_n=pd.read_excel('Parac_electricos_IEEE33n.xlsx',sheet_name='Nodos')
-general=pd.read_excel('Parac_electricos_IEEE33n.xlsx',sheet_name='General')
+datos_l=pd.read_excel(rut_arc,sheet_name='Lineas')
+datos_n=pd.read_excel(rut_arc,sheet_name='Nodos')
+general=pd.read_excel(rut_arc,sheet_name='General')
 
 # === Parámetros base ===
 p_base=general.iloc[0, 0]   #potencia base
 v_base=general.iloc[0, 1]   #voltaje base
-z_base=(v_base**2)/p_base
+z_base=(v_base**2)/p_base   #impedancia base
+
+
 
 # === Datos de red ===
 l=datos_l.shape[0]     # nodos
@@ -23,6 +26,7 @@ rx=np.array(datos_l[['resistencia [ohmio]', 'reactancia [ohmio]']]/z_base).resha
 y = 1/(rx[:,0]+1j*rx[:,1])  # vector de admitancias
 nodos_n=np.array(datos_n['Nodo']-1).reshape(n,1)
 pq_activa=np.array((datos_n[['Pload [Kw]', 'Qload  [Kvar]']]*1000)/p_base).reshape(n,2)
+
 
 
 # === Matrices de incidencia ===
@@ -41,36 +45,33 @@ Smk= cvx.Variable((l),complex=True)  #variable compleja flujo de potencia de m a
 u = cvx.Variable((n))                #variable real tension
 wl= cvx.Variable((l),complex=True)   #variable compleja
 
+# === funcion objetivo ===
+Funcion_objetivo= cvx.sum(sk-(pq_activa[:,0]+ 1j*pq_activa[:,1]))
 
 # === Restricciones ===
-Funcion_objetivo= cvx.sum(sk-(pq_activa[:,0]+ 1j*pq_activa[:,1]))
 res=[]
-res+=[u[0]==1]                                                                #nodo slack
-res+=[sk-(pq_activa[:,0]+ 1j*pq_activa[:,1]) ==Apositiva@Skm+Anegativa@Smk]   #balance de potencia
-res+=[u>=0.8]                                                                  #limite inferior de tension
-res+=[u<=1.1]                                                                  #limite superior de tension
+res+=[u[0]==1]
+res+=[sk-(pq_activa[:,0]+ 1j*pq_activa[:,1]) + 1j*skc  ==Apositiva@Skm+Anegativa@Smk]   #balance de potencia
+res+=[cvx.abs(sk[0]) <= 100]                                                      #nodo slack
+res+=[cvx.real(sk[0]) >= 0]
+res+=[u>=0.9**2]                                                                  #limite inferior de tension
+res+=[u<=1.05**2]                                                                  #limite superior de tension
+res += [cvx.abs(sk[1:n]) <= 0]                                                    #solo un nodo de holgura
 
-res += [cvx.abs(sk[1:n]) <= 0]                                               # solo un nodo de holgura
-
-res += [Skm == cvx.multiply(np.conj(y),((Apositiva.T @ u) - wl))]            #flujo de potencia km
-res += [Smk == cvx.multiply(np.conj(y),((Anegativa.T @ u) - cvx.conj(wl)))]  #flujo de potencia mk
+res += [Skm == cvx.multiply(np.conj(y),((Apositiva.T @ u) - wl))]                 #flujo de potencia km
+res += [Smk == cvx.multiply(np.conj(y),((Anegativa.T @ u) - cvx.conj(wl)))]       #flujo de potencia mk
 
 for i in range(l):
     res+=[cvx.SOC(u[int(nodos_l[i,0])]+u[int(nodos_l[i,1])],cvx.vstack([2 * wl[i],u[int(nodos_l[i,0])]-u[int(nodos_l[i,1])]]))]
 
 
-# === Restricciones de los capacitores ===
-res += [skc == z @ capacitores]
-res += [cvx.sum(z,axis=0)  <= 1]
-numero_capacitores_disponibles=0      #Numero de capacitores disponibles
-res += [cvx.sum(z) <= numero_capacitores_disponibles]
 
-
-# === Función objetivo y resolución ===
+# === Función objetivo y solución ===
 obj = cvx.Minimize(cvx.real(Funcion_objetivo))
 Z= cvx.Problem(obj,res)
-Z.solve("MOSEK")
+Z.solve('MOSEK')
 print("Valor de las perdidas", obj.value*p_base, "KW", Z.status)
+
 
 
 
